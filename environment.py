@@ -31,10 +31,34 @@ from std_srvs.srv import Empty
 
 from turtlebot3_msgs.srv import Dqn
 
+import gym
+from gym import spaces
 
-class DQNEnvironment(Node):
+class DRLEnv(gym.Env):
     def __init__(self):
-        super().__init__('dqn_environment')
+        super(DRLEnv, self).__init__()
+        # Define action and observation space
+        # They must be gym.spaces objects
+        # Example when using discrete actions:
+        self.action_space = spaces.Discrete(5)
+        self.observation_space = spaces.Box(low=-1, high=1, shape=(N_CHANNELS, HEIGHT, WIDTH), dtype=np.uint8)
+
+
+    def step(self, action):
+        ...
+        return observation, reward, done, info
+    def reset(self):
+        ...
+        return observation  # reward, done, info can't be included
+    def render(self, mode='human'):
+        ...
+    def close (self):
+        ...
+
+
+class DRLTrainer(Node):
+    def __init__(self):
+        super().__init__('drl_trainer')
 
         """************************************************************
         ** Initialise variables
@@ -172,6 +196,26 @@ class DQNEnvironment(Node):
     def reset(self):
         return self.state
 
+    def v_step(self, action):
+        twist = Twist()
+        twist.linear.x = 0.3
+        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
+        self.cmd_vel_pub.publish(twist)
+
+        response.state = self.get_state()
+        response.reward = self.get_reward(action)
+        response.done = self.done
+
+        if self.done is True:
+            self.done = False
+            self.succeed = False
+            self.fail = False
+
+        if request.init is True:
+            self.init_goal_distance = math.sqrt(
+                (self.goal_pose_x - self.last_pose_x) ** 2
+                + (self.goal_pose_y - self.last_pose_y) ** 2)
+
     def dqn_com_callback(self, request, response):
         action = request.action
         twist = Twist()
@@ -246,10 +290,10 @@ class DQNEnvironment(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    dqn_environment = DQNEnvironment()
-    rclpy.spin(dqn_environment)
+    drl_trainer = DRLTrainer()
+    rclpy.spin(drl_trainer)
 
-    dqn_environment.destroy()
+    drl_trainer.destroy()
     rclpy.shutdown()
 
 

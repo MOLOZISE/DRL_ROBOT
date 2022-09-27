@@ -1,27 +1,10 @@
-#!/usr/bin/env python3
-#
-# Copyright 2019 ROBOTIS CO., LTD.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# Authors: Ryan Shim, Gilbert
-
 import math
 import numpy
 
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -30,11 +13,77 @@ from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Empty
 
 from turtlebot3_msgs.srv import Dqn
+from stable_baselines3 import PPO
+
+import time
 
 
-class DQNEnvironment(Node):
+import gym
+from gym import spaces
+
+class DRLEnv(gym.Env):
+    def __init__(self, n_actions):
+        super(DRLEnv, self).__init__()
+        # Define action and observation space
+        # They must be gym.spaces objects
+        # Example when using discrete actions:
+        self.n_actions = n_actions
+        self.action_space = spaces.Discrete(n_actions)
+        self.observation_space = spaces.Box(low=-1, high=1, shape=(10,), dtype=numpy.uint8)
+
+        rclpy.init(args=None)
+        self.drl_trainer = DRLTrainer()
+        #rclpy.spin(self.drl_trainer)
+
+        #self.drl_trainer.destroy()
+        #rclpy.shutdown()
+
+
+    def step(self, action):
+        for _ in range(10):
+            rclpy.spin_once(self.drl_trainer)
+        twist = Twist()
+        twist.linear.x = 0.3
+        twist.angular.z = ((self.n_actions - 1) / 2 - action) * 1.5
+        self.drl_trainer.cmd_vel_pub.publish(twist)
+        observation = self.drl_trainer.get_state()
+        reward = self.drl_trainer.get_reward(action)
+        done = self.drl_trainer.done
+        if self.drl_trainer.done:
+            self.drl_trainer.done = False
+            self.drl_trainer.succeed = False
+            self.drl_trainer.fail = False
+        info = {}
+        if done:
+            time.sleep(1)
+
+        # step loop rate
+        time.sleep(0.1)
+
+        return observation, reward, done, info
+    def reset(self):
+        time.sleep(1)
+        if self.drl_trainer.done:
+            self.drl_trainer.done = False
+            self.drl_trainer.succeed = False
+            self.drl_trainer.fail = False
+        for _ in range(10):
+            rclpy.spin_once(self.drl_trainer)
+        self.drl_trainer.init_goal_distance = math.sqrt(
+            (self.drl_trainer.goal_pose_x - self.drl_trainer.last_pose_x) ** 2
+            + (self.drl_trainer.goal_pose_y - self.drl_trainer.last_pose_y) ** 2)
+        observation = self.drl_trainer.reset()
+        return observation  # reward, done, info can't be included
+    def render(self, mode='human'):
+        pass
+    def close (self):
+        self.drl_trainer.destroy()
+        rclpy.shutdown()
+        pass
+
+class DRLTrainer(Node):
     def __init__(self):
-        super().__init__('dqn_environment')
+        super().__init__('drl_trainer')
 
         """************************************************************
         ** Initialise variables
@@ -84,6 +133,15 @@ class DQNEnvironment(Node):
             self.scan_callback,
             qos_profile=qos_profile_sensor_data)
 
+        # Matlab SLAM
+        #####################
+        self.map_sub = self.create_subscription(
+            OccupancyGrid,
+            'map',
+            self.map_callback,
+            qos)
+        ####################
+
         # Initialise client
         self.task_succeed_client = self.create_client(Empty, 'task_succeed')
         self.task_fail_client = self.create_client(Empty, 'task_fail')
@@ -94,6 +152,14 @@ class DQNEnvironment(Node):
     """*******************************************************************************
     ** Callback functions and relevant functions
     *******************************************************************************"""
+
+    ######
+    def map_callback(self, msg):
+        print(msg)
+        # 7568 = 86 * 88
+        print(len(msg.data))
+    ######
+
     def goal_pose_callback(self, msg):
         self.goal_pose_x = msg.position.x
         self.goal_pose_y = msg.position.y
@@ -127,11 +193,27 @@ class DQNEnvironment(Node):
         self.min_obstacle_angle = numpy.argmin(self.scan_ranges)
 
     def get_state(self):
-        state = list()
-        state.append(float(self.goal_distance))
-        state.append(float(self.goal_angle))
-        state.append(float(self.min_obstacle_distance))
-        state.append(float(self.min_obstacle_angle))
+        # state scaling
+        pre_state = self.scan_ranges[0::45]
+        state = []
+
+        #print(state)
+        state.append(float(self.goal_distance / 3.5))
+        state.append(float(self.goal_angle / 3.5))
+        for scan in pre_state:
+            if scan == numpy.inf:
+                scan = 3.5
+            scan = scan / 3.5
+            if scan > 1:
+                scan = 1
+            elif scan < -1:
+                scan = -1
+            state.append(scan)
+        #print(state)
+        #print(state)
+        # for data in state:
+        #     if not (data >= -1 and data <= 1):
+        #         print(state)
         self.local_step += 1
 
         # Succeed
@@ -147,7 +229,7 @@ class DQNEnvironment(Node):
             self.task_succeed_client.call_async(req)
 
         # Fail
-        if self.min_obstacle_distance < 0.13:  # unit: m
+        if self.min_obstacle_distance < 0.20:  # unit: m
             print("Collision! :(")
             self.fail = True
             self.done = True
@@ -158,9 +240,11 @@ class DQNEnvironment(Node):
                 self.get_logger().info('service not available, waiting again...')
             self.task_fail_client.call_async(req)
 
-        if self.local_step == 500:
+        if self.local_step == 5000:
             print("Time out! :(")
+            self.fail = True
             self.done = True
+            self.cmd_vel_pub.publish(Twist())  # robot stop
             self.local_step = 0
             req = Empty.Request()
             while not self.task_fail_client.wait_for_service(timeout_sec=1.0):
@@ -170,7 +254,7 @@ class DQNEnvironment(Node):
         return state
 
     def reset(self):
-        return self.state
+        return self.get_state()
 
     def dqn_com_callback(self, request, response):
         action = request.action
@@ -211,11 +295,19 @@ class DQNEnvironment(Node):
 
         # + for succeed, - for fail
         if self.succeed:
+            #print(self.succeed)
             reward += 5
+            #print(reward)
         elif self.fail:
-            reward -= -10
+            #print(self.fail)
+            reward += -10
+            #print(reward)
+        #print(self.succeed)
+        #print(self.fail)
+        #print(yaw_reward)
+        #print(distance_reward)
+        #print(obstacle_reward)
         print(reward)
-
         return reward
 
     """*******************************************************************************
@@ -244,14 +336,22 @@ class DQNEnvironment(Node):
 
         return roll, pitch, yaw
 
+class Trainer():
+    def __init__(self):
+        #super().__init__('trainer')
+        print("0")
+        self.env = DRLEnv(n_actions=5)
+        print("1")
+        self.training()
+        print("2")
+
+    def training(self):
+        model = PPO("MlpPolicy", self.env, verbose=1)
+        model.learn(total_timesteps=5000)
+        model.save("ppo_")
+
 def main(args=None):
-    rclpy.init(args=args)
-    dqn_environment = DQNEnvironment()
-    rclpy.spin(dqn_environment)
-
-    dqn_environment.destroy()
-    rclpy.shutdown()
-
+    Trainer()
 
 if __name__ == '__main__':
     main()
