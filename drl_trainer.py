@@ -136,8 +136,8 @@ class DRLTrainer(Node):
         # Matlab SLAM
         #####################
         self.map_sub = self.create_subscription(
-            OccupancyGrid,
-            'map',
+            OccupancyGrid, #msg_type same
+            'map', # map_info willbe
             self.map_callback,
             qos)
         ####################
