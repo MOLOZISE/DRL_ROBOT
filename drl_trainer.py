@@ -61,8 +61,7 @@ class gym_NavEnv(gym.Env):
             self.drl_trainer.succeed = False
             self.drl_trainer.fail = False
         info = {}
-        if done:
-            time.sleep(3)
+
         self.global_count += 1
         if self.global_count % 5000 * 10 == 0:
             print("current step : " + str(self.global_count) + " goal_count : " + str(
@@ -79,7 +78,7 @@ class gym_NavEnv(gym.Env):
         return observation, reward, done, info
 
     def reset(self):
-        time.sleep(5)
+        time.sleep(3)
         if self.drl_trainer.done:
             self.drl_trainer.done = False
             self.drl_trainer.succeed = False
@@ -213,7 +212,7 @@ class ros_NavEnv(Node):
         # print(self.goal_distance)
 
     def scan_callback(self, msg):
-        # print(msg)
+        #print(msg)
         self.scan_ranges = msg.ranges
         # print(len(msg.ranges))
         # print(self.scan_ranges)
@@ -424,6 +423,7 @@ class Trainer():
         print("0")
         self.env = gym_NavEnv(n_actions=5)
         print("1")
+        time.sleep(2)
         if mode == "i":
             self.inferencing()
         else:
@@ -432,13 +432,13 @@ class Trainer():
 
     def training(self):
         model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="result_ppoppo_1200000", env=self.env)
+        model = PPO.load(path="ppo_1000000", env=self.env)
         model.learn(total_timesteps=100000, log_interval=5000)
-        model.save("result_ppoppo_1300000")
-        result_folder = "result_ppo/"
+        model.save("ppo_1100000")
+        result_folder = ""#"result_ppo/"
 
         for i in range(20):
-            logname = "ppo_" + str(300000 + i * 100000)
+            logname = "ppo_" + str(200000 + i * 100000)
             model.learn(total_timesteps=100000,
                         reset_num_timesteps=False,
                         tb_log_name=logname)
@@ -453,7 +453,7 @@ class Trainer():
 
     def inferencing(self):
         model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="ppo_100000", env=self.env)
+        model = PPO.load(path="ppo_1000000", env=self.env)
 
         obs = self.env.reset()
         while True:
