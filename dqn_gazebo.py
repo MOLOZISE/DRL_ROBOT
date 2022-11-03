@@ -75,7 +75,7 @@ class DQNGazebo(Node):
 
         # Process
         self.publish_timer = self.create_timer(
-            0.010,  # unit: s
+            0.1,  # unit: s
             self.publish_callback)
 
     """*******************************************************************************
