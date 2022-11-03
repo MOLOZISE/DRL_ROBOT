@@ -1,5 +1,6 @@
 import math
 import numpy
+import os
 
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import Twist
@@ -17,27 +18,33 @@ from stable_baselines3 import PPO
 
 import time
 
-
 import gym
 from gym import spaces
+import sys
 
-class DRLEnv(gym.Env):
+
+# DRLEnv -> gym_NavEnv
+# DRLTrainer -> ros_NavEnv
+# Trainer ->
+
+class gym_NavEnv(gym.Env):
+
     def __init__(self, n_actions):
-        super(DRLEnv, self).__init__()
+        super(gym_NavEnv, self).__init__()
         # Define action and observation space
         # They must be gym.spaces objects
         # Example when using discrete actions:
         self.n_actions = n_actions
         self.action_space = spaces.Discrete(n_actions)
-        self.observation_space = spaces.Box(low=-1, high=1, shape=(10,), dtype=numpy.uint8)
-
+        self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(26,), dtype=numpy.uint8)
         rclpy.init(args=None)
-        self.drl_trainer = DRLTrainer()
-        #rclpy.spin(self.drl_trainer)
-
-        #self.drl_trainer.destroy()
-        #rclpy.shutdown()
-
+        self.drl_trainer = ros_NavEnv()
+        self.goal_count = 0
+        self.coll_count = 0
+        self.global_count = 0
+        # rclpy.spin(self.drl_trainer)
+        # self.drl_trainer.destroy()
+        # rclpy.shutdown()
 
     def step(self, action):
         for _ in range(10):
@@ -55,14 +62,24 @@ class DRLEnv(gym.Env):
             self.drl_trainer.fail = False
         info = {}
         if done:
-            time.sleep(1)
-
+            time.sleep(3)
+        self.global_count += 1
+        if self.global_count % 5000 * 10 == 0:
+            print("current step : " + str(self.global_count) + " goal_count : " + str(
+                self.drl_trainer.goal_count) + " coll_count : " + str(
+                self.drl_trainer.coll_count) + " goal percent : " + str(
+                self.drl_trainer.goal_count // (self.drl_trainer.goal_count + self.drl_trainer.coll_count)))
+            self.drl_trainer.coll_count = 0
+            self.drl_trainer.goal_count = 0
         # step loop rate
-        time.sleep(0.1)
+        # print(observation)
+        # print(reward)
+        # time.sleep(0.5)
 
         return observation, reward, done, info
+
     def reset(self):
-        time.sleep(1)
+        time.sleep(5)
         if self.drl_trainer.done:
             self.drl_trainer.done = False
             self.drl_trainer.succeed = False
@@ -73,18 +90,21 @@ class DRLEnv(gym.Env):
             (self.drl_trainer.goal_pose_x - self.drl_trainer.last_pose_x) ** 2
             + (self.drl_trainer.goal_pose_y - self.drl_trainer.last_pose_y) ** 2)
         observation = self.drl_trainer.reset()
+
         return observation  # reward, done, info can't be included
+
     def render(self, mode='human'):
         pass
-    def close (self):
+
+    def close(self):
         self.drl_trainer.destroy()
         rclpy.shutdown()
         pass
 
-class DRLTrainer(Node):
+
+class ros_NavEnv(Node):
     def __init__(self):
         super().__init__('drl_trainer')
-
         """************************************************************
         ** Initialise variables
         ************************************************************"""
@@ -105,6 +125,9 @@ class DRLTrainer(Node):
         self.scan_ranges = []
         self.min_obstacle_distance = 10.0
         self.min_obstacle_angle = 10.0
+
+        self.goal_count = 0
+        self.coll_count = 0
 
         self.local_step = 0
 
@@ -135,11 +158,11 @@ class DRLTrainer(Node):
 
         # Matlab SLAM
         #####################
-        self.map_sub = self.create_subscription(
-            OccupancyGrid, #msg_type same
-            'map', # map_info willbe
-            self.map_callback,
-            qos)
+        # self.map_sub = self.create_subscription(
+        #     OccupancyGrid,  # msg_type same
+        #     'map',  # map_info willbe
+        #     self.map_callback,
+        #     qos)
         ####################
 
         # Initialise client
@@ -154,10 +177,11 @@ class DRLTrainer(Node):
     *******************************************************************************"""
 
     ######
-    def map_callback(self, msg):
-        print(msg)
-        # 7568 = 86 * 88
-        print(len(msg.data))
+    # def map_callback(self, msg):
+    #     print(msg)
+    #     # 7568 = 86 * 88
+    #     print(len(msg.data))
+
     ######
 
     def goal_pose_callback(self, msg):
@@ -170,12 +194,12 @@ class DRLTrainer(Node):
         _, _, self.last_pose_theta = self.euler_from_quaternion(msg.pose.pose.orientation)
 
         goal_distance = math.sqrt(
-            (self.goal_pose_x-self.last_pose_x)**2
-            + (self.goal_pose_y-self.last_pose_y)**2)
+            (self.goal_pose_x - self.last_pose_x) ** 2
+            + (self.goal_pose_y - self.last_pose_y) ** 2)
 
         path_theta = math.atan2(
-            self.goal_pose_y-self.last_pose_y,
-            self.goal_pose_x-self.last_pose_x)
+            self.goal_pose_y - self.last_pose_y,
+            self.goal_pose_x - self.last_pose_x)
 
         goal_angle = path_theta - self.last_pose_theta
         if goal_angle > math.pi:
@@ -186,59 +210,88 @@ class DRLTrainer(Node):
 
         self.goal_distance = goal_distance
         self.goal_angle = goal_angle
+        # print(self.goal_distance)
 
     def scan_callback(self, msg):
+        # print(msg)
         self.scan_ranges = msg.ranges
+        # print(len(msg.ranges))
+        # print(self.scan_ranges)
+        # count = 0
+        # sr = 0
+        # for i in self.scan_ranges:
+        #    if math.isnan(i):
+        #        count += 1
+        #    else:
+        #        sr += 1
+        # print(count)
+        # print(len(self.scan_ranges))
+        # print(sr)
         self.min_obstacle_distance = min(self.scan_ranges)
         self.min_obstacle_angle = numpy.argmin(self.scan_ranges)
 
     def get_state(self):
         # state scaling
-        pre_state = self.scan_ranges[0::45]
-        state = []
+        # pre_state = []
 
-        #print(state)
-        state.append(float(self.goal_distance / 3.5))
-        state.append(float(self.goal_angle / 3.5))
+        # for i in range(len(self.scan_ranges)):
+        #    if i % 10 == 0:
+        #        if len(pre_state) < 24:
+        #            pre_state.append(i)
+        pre_state = self.scan_ranges[0::15]
+        # print(len(self.scan_ranges), len(pre_state))
+        state = []
+        # print(self.goal_distance, self.goal_angle)
+
+        # print(state)
+        state.append(float(self.goal_distance))
+        state.append(float(self.goal_angle))
         for scan in pre_state:
             if scan == numpy.inf:
                 scan = 3.5
-            scan = scan / 3.5
-            if scan > 1:
-                scan = 1
-            elif scan < -1:
-                scan = -1
+            # scan = scan / 3.5
+            if scan < 3.5:
+                pass
+            else:
+                scan = 3.5
             state.append(scan)
-        #print(state)
-        #print(state)
+        # print(state)
+        # print(state)
         # for data in state:
         #     if not (data >= -1 and data <= 1):
         #         print(state)
         self.local_step += 1
-
+        # print(state)
         # Succeed
-        if self.goal_distance < 0.20:  # unit: m
+        if self.goal_distance < 0.2:  # unit: m
             print("Goal! :)")
             self.succeed = True
             self.done = True
             self.cmd_vel_pub.publish(Twist())  # robot stop
             self.local_step = 0
+            self.goal_count += 1
             req = Empty.Request()
             while not self.task_succeed_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info('service not available, waiting again...')
             self.task_succeed_client.call_async(req)
 
         # Fail
-        if self.min_obstacle_distance < 0.20:  # unit: m
+        if self.min_obstacle_distance < 0.2:  # unit: m
             print("Collision! :(")
             self.fail = True
             self.done = True
             self.cmd_vel_pub.publish(Twist())  # robot stop
             self.local_step = 0
+            self.coll_count += 1
             req = Empty.Request()
             while not self.task_fail_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info('service not available, waiting again...')
             self.task_fail_client.call_async(req)
+
+            # os.system('killall occupancy_grid_')
+            # os.system('killall cartographer_no')
+            # os.system('killall rviz2')
+            # time.sleep(5) # rviz2
 
         if self.local_step == 5000:
             print("Time out! :(")
@@ -260,7 +313,7 @@ class DRLTrainer(Node):
         action = request.action
         twist = Twist()
         twist.linear.x = 0.3
-        twist.angular.z = ((self.action_size - 1)/2 - action) * 1.5
+        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
         self.cmd_vel_pub.publish(twist)
 
         response.state = self.get_state()
@@ -274,45 +327,73 @@ class DRLTrainer(Node):
 
         if request.init is True:
             self.init_goal_distance = math.sqrt(
-                (self.goal_pose_x-self.last_pose_x)**2
-                + (self.goal_pose_y-self.last_pose_y)**2)
+                (self.goal_pose_x - self.last_pose_x) ** 2
+                + (self.goal_pose_y - self.last_pose_y) ** 2)
 
         return response
 
     def get_reward(self, action):
-        yaw_reward = 1 - 2*math.sqrt(math.fabs(self.goal_angle / math.pi))
+        # yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
+        #
+        # distance_reward = (2 * self.init_goal_distance) / \
+        #                   (self.init_goal_distance + self.goal_distance) - 1
+        #
+        # # Reward for avoiding obstacles
+        # if self.min_obstacle_distance < 0.25:
+        #     obstacle_reward = -2
+        # else:
+        #     obstacle_reward = 0
+        #
+        # reward = yaw_reward + distance_reward + obstacle_reward
+        #
+        # # + for succeed, - for fail
+        # if self.succeed:
+        #     # print(self.succeed)
+        #     reward += 5
+        #     # print(reward)
+        # elif self.fail:
+        #     # print(self.fail)
+        #     reward += -10
+        #     # print(reward)
+        # # print(self.succeed)
+        # # print(self.fail)
+        # # print(yaw_reward)
+        # # print(distance_reward)
+        # # print(obstacle_reward)
+        # #print(reward)
+        yaw_reward = []
+        obstacle_min_range = self.min_obstacle_distance
+        current_distance = self.goal_distance
+        # heading = state[-4]
 
-        distance_reward = (2 * self.init_goal_distance) / \
-            (self.init_goal_distance + self.goal_distance) - 1
+        for i in range(5):
+            angle = -math.pi / 4 + self.goal_angle + (math.pi / 8 * i) + math.pi / 2
+            tr = 1 - 4 * math.fabs(0.5 - math.modf(0.25 + 0.5 * angle % (2 * math.pi) / math.pi)[0])
+            yaw_reward.append(tr)
 
-        # Reward for avoiding obstacles
-        if self.min_obstacle_distance < 0.25:
-            obstacle_reward = -2
+        distance_rate = 2 ** (current_distance / self.init_goal_distance)
+
+        if obstacle_min_range < 0.2:
+            ob_reward = -5
         else:
-            obstacle_reward = 0
+            ob_reward = 0
 
-        reward = yaw_reward + distance_reward + obstacle_reward
+        reward = ((round(yaw_reward[action] * 5, 2)) * distance_rate) + ob_reward
 
-        # + for succeed, - for fail
         if self.succeed:
-            #print(self.succeed)
-            reward += 5
-            #print(reward)
+            # print(self.succeed)
+            reward += 100
+            # print(reward)
         elif self.fail:
-            #print(self.fail)
-            reward += -10
-            #print(reward)
-        #print(self.succeed)
-        #print(self.fail)
-        #print(yaw_reward)
-        #print(distance_reward)
-        #print(obstacle_reward)
-        print(reward)
+            # print(self.fail)
+            reward += -100
+        # print(reward)
         return reward
 
     """*******************************************************************************
     ** Below should be replaced when porting for ROS 2 Python tf_conversions is done.
     *******************************************************************************"""
+
     def euler_from_quaternion(self, quat):
         """
         Converts quaternion (w in last place) to euler roll, pitch, yaw
@@ -323,35 +404,68 @@ class DRLTrainer(Node):
         z = quat.z
         w = quat.w
 
-        sinr_cosp = 2 * (w*x + y*z)
-        cosr_cosp = 1 - 2*(x*x + y*y)
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
         roll = numpy.arctan2(sinr_cosp, cosr_cosp)
 
-        sinp = 2 * (w*y - z*x)
+        sinp = 2 * (w * y - z * x)
         pitch = numpy.arcsin(sinp)
 
-        siny_cosp = 2 * (w*z + x*y)
-        cosy_cosp = 1 - 2 * (y*y + z*z)
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
         yaw = numpy.arctan2(siny_cosp, cosy_cosp)
 
         return roll, pitch, yaw
 
+
 class Trainer():
-    def __init__(self):
-        #super().__init__('trainer')
+    def __init__(self, mode):
+        # super().__init__('trainer')
         print("0")
-        self.env = DRLEnv(n_actions=5)
+        self.env = gym_NavEnv(n_actions=5)
         print("1")
-        self.training()
+        if mode == "i":
+            self.inferencing()
+        else:
+            self.training()
         print("2")
 
     def training(self):
         model = PPO("MlpPolicy", self.env, verbose=1)
-        model.learn(total_timesteps=5000)
-        model.save("ppo_")
+        model = PPO.load(path="result_ppoppo_1200000", env=self.env)
+        model.learn(total_timesteps=100000, log_interval=5000)
+        model.save("result_ppoppo_1300000")
+        result_folder = "result_ppo/"
 
-def main(args=None):
-    Trainer()
+        for i in range(20):
+            logname = "ppo_" + str(300000 + i * 100000)
+            model.learn(total_timesteps=100000,
+                        reset_num_timesteps=False,
+                        tb_log_name=logname)
+
+            # self.env.close()
+
+            path = result_folder + logname
+            model.save(path)
+
+        # self.env = gym_NavEnv(n_actions=5)
+        # model.load(load_path=path, env=env)
+
+    def inferencing(self):
+        model = PPO("MlpPolicy", self.env, verbose=1)
+        model = PPO.load(path="ppo_100000", env=self.env)
+
+        obs = self.env.reset()
+        while True:
+            action, _states = model.predict(obs)
+            obs, rewards, dones, info = self.env.step(action)
+            if dones:
+                time.sleep(10)
+
+
+def main(args=sys.argv[1]):
+    Trainer(args)
+
 
 if __name__ == '__main__':
     main()
