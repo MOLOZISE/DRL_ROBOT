@@ -96,8 +96,8 @@ class RealGoal(Node):
 
     def generate_goal_pose(self):
         x, y = input("input goal pose : ").split(" ")
-        self.goal_pose_x = x
-        self.goal_pose_y = y
+        self.goal_pose_x = float(x)
+        self.goal_pose_y = float(y)
         print("Goal pose: ", self.goal_pose_x, self.goal_pose_y)
 
 
