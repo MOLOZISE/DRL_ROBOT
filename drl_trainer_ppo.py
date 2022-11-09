@@ -60,9 +60,8 @@ class gym_NavEnv(gym.Env):
             self.drl_trainer.done = False
             self.drl_trainer.succeed = False
             self.drl_trainer.fail = False
-        info = {}
-        if done:
             time.sleep(2)
+        info = {}
         self.global_count += 1
         if self.global_count % 5000 * 10 == 0:
             print("current step : " + str(self.global_count) + " goal_count : " + str(
@@ -304,6 +303,7 @@ class ros_NavEnv(Node):
             self.done = True
             self.cmd_vel_pub.publish(Twist())  # robot stop
             self.local_step = 0
+            self.coll_count += 1
             req = Empty.Request()
             while not self.task_fail_client.wait_for_service(timeout_sec=1.0):
                 self.get_logger().info('service not available, waiting again...')
