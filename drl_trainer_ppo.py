@@ -378,12 +378,12 @@ class ros_NavEnv(Node):
 
         distance_rate = 2 ** (current_distance / self.init_goal_distance)
 
-        if obstacle_min_range < 0.2:
-            ob_reward = -5
-        else:
-            ob_reward = 0
+        # if obstacle_min_range < 0.2:
+        #    ob_reward = -5
+        # else:
+        #    ob_reward = 0
 
-        reward = ((round(yaw_reward[action] * 5, 2)) * distance_rate) + ob_reward
+        reward = ((round(yaw_reward[action] * 5, 2)) * distance_rate) * 0.1
 
         if self.succeed:
             # print(self.succeed)
@@ -436,14 +436,14 @@ class Trainer():
         print("2")
 
     def training(self):
-        model = PPO("MlpPolicy", self.env, verbose=1)
-        # model = PPO.load(path="result_ppoppo_1200000", env=self.env)
+        # model = PPO("MlpPolicy", self.env, verbose=1)
+        model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
         model.learn(total_timesteps=100000, log_interval=5000)
-        model.save("ppo_r1_100000")
+        model.save("result_ppo/ppo_r1_2300000")
         result_folder = "result_ppo/"
 
-        for i in range(20):
-            logname = "ppo_r1_" + str((i + 2) * 100000)
+        for i in range(10):
+            logname = "ppo_r1_" + str((i + 2) * 100000 + 2200000)
             model.learn(total_timesteps=100000,
                         reset_num_timesteps=False,
                         tb_log_name=logname)
@@ -457,8 +457,8 @@ class Trainer():
         # model.load(load_path=path, env=env)
 
     def inferencing(self):
-        model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="result_ppo/ppo_2300000", env=self.env)
+        # model = PPO("MlpPolicy", self.env, verbose=1)
+        model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
 
         obs = self.env.reset()
         while True:
