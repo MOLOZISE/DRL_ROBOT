@@ -38,14 +38,15 @@ class gym_NavEnv(gym.Env):
         # Example when using discrete actions:
         self.n_actions = n_actions
         # self.action_space = spaces.Discrete(n_actions)
-        self.action_space = spaces.Box(low=-3, high=3, shape=(2,), dtype="float32")
-        self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(26,), dtype="float32")
+        self.action_space = spaces.Box(low=-2, high=2, shape=(2,), dtype="float32")
+        self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(28,), dtype="float32") # 26 + 2(before action)
         print(self.action_space)
         rclpy.init(args=None)
         self.drl_trainer = ros_NavEnv()
         self.goal_count = 0
         self.coll_count = 0
         self.global_count = 0
+        self.before_action = [0, 0]
         # rclpy.spin(self.drl_trainer)
         # self.drl_trainer.destroy()
         # rclpy.shutdown()
@@ -60,15 +61,15 @@ class gym_NavEnv(gym.Env):
         av = action[1]  # angular_velocity
         # print(lv, av)
         # print(lv, av)
-        lv += 3  # 0 ~ 6
-        lv /= 12
+        lv += 2  # 0 ~ 4
+        lv /= 20 # 0 ~ 0.2
         # twist.linear.x = 0.15
         twist.linear.x = lv
         twist.angular.z = av
         # print(lv, av)
         # twist.angular.z = ((self.n_actions - 1) / 2 - action) * 1.5
         self.drl_trainer.cmd_vel_pub.publish(twist)
-        observation = self.drl_trainer.get_state()
+        observation = self.drl_trainer.get_state(self.before_action)
         reward = self.drl_trainer.get_reward(action)
         done = self.drl_trainer.done
         if done:
@@ -91,6 +92,8 @@ class gym_NavEnv(gym.Env):
         # print(lv, av)
         # print(reward)
         # time.sleep(0.5)
+        self.before_action[0] = lv
+        self.before_action[1] = av
 
         return observation, reward, done, info
 
@@ -106,7 +109,7 @@ class gym_NavEnv(gym.Env):
         self.drl_trainer.init_goal_distance = math.sqrt(
             (self.drl_trainer.goal_pose_x - self.drl_trainer.last_pose_x) ** 2
             + (self.drl_trainer.goal_pose_y - self.drl_trainer.last_pose_y) ** 2)
-        observation = self.drl_trainer.reset()
+        observation = self.drl_trainer.reset(self.before_action)
 
         return observation  # reward, done, info can't be included
 
@@ -234,7 +237,7 @@ class ros_NavEnv(Node):
         self.min_obstacle_distance = min(self.scan_ranges)
         self.min_obstacle_angle = numpy.argmin(self.scan_ranges)
 
-    def get_state(self):
+    def get_state(self, extraargs):
         # state scaling
         pre_state = []
         for i in range(24):
@@ -265,10 +268,13 @@ class ros_NavEnv(Node):
         # for data in state:
         #     if not (data >= -1 and data <= 1):
         #         print(state)
+        state.append(extraargs[0])
+        state.append(extraargs[1])
+        print(state)
         self.local_step += 1
 
         # Succeed
-        if self.goal_distance < 0.2:  # unit: m
+        if self.goal_distance < 0.15:  # unit: m
             print("Goal! :)")
             self.succeed = True
             self.done = True
@@ -281,7 +287,7 @@ class ros_NavEnv(Node):
             self.task_succeed_client.call_async(req)
 
         # Fail
-        if self.min_obstacle_distance < 0.2:  # unit: m
+        if self.min_obstacle_distance < 0.15:  # unit: m
             print("Collision! :(")
             self.fail = True
             self.done = True
@@ -312,8 +318,8 @@ class ros_NavEnv(Node):
 
         return state
 
-    def reset(self):
-        return self.get_state()
+    def reset(self, extraargs):
+        return self.get_state(extraargs)
 
     def dqn_com_callback(self, request, response):
         action = request.action
@@ -402,22 +408,26 @@ class ros_NavEnv(Node):
         av = action[1]  # angular_velocity
         # print(lv, av)
         # print(lv, av)
-        lv += 3  # 0 ~ 6
-        lv /= 24
+        lv += 2  # 0 ~ 4
+        lv /= 20 # 0 ~ 0.2
         # dist_reward = 1 - current_distance**0.4
         # vel_discount = (1 - max(lv, 0.1))**(1/max(current_distance, 0.1))
         # reward = vel_discount * dist_reward
         if self.succeed:
             # print(self.succeed)
-            reward = 100
+            reward = 200
             return reward
             # print(reward)
         elif self.fail:
             # print(self.fail)
-            reward = -100
-        else:
-            r3 = lambda x: 1 - x if x < 1 else 0.0
-            reward = action[0] / 2 - abs(action[1]) / 2 - r3(obstacle_min_range) / 2
+            reward = -150
+        elif obstacle_min_range < 0.15 + 0.15: # radius robot + safety
+            reward = 1 - (current_distance / (0.15 + 0.15))
+        else: # scale factor 1
+            reward = 1 * (self.init_goal_distance - current_distance)
+        # else:
+        #     r3 = lambda x: 1 - x if x < 1 else 0.0
+        #     reward = action[0] / 2 - abs(action[1]) / 2 - r3(obstacle_min_range) / 2
         # else:
         #    reward = 1 - numpy.exp(current_distance*0.1)
         print(reward)
