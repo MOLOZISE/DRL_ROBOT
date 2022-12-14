@@ -14,7 +14,9 @@ from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Empty
 
 from turtlebot3_msgs.srv import Dqn
-from stable_baselines3 import PPO
+# from stable_baselines3 import PPO
+from stable_baselines3 import TD3
+from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 
 import time
 
@@ -29,19 +31,22 @@ import sys
 
 class gym_NavEnv(gym.Env):
 
-    def __init__(self, n_actions):
+    def __init__(self, n_actions):  # 5 (2 - a) * 1.5 -> -3 ~ 3
         super(gym_NavEnv, self).__init__()
         # Define action and observation space
         # They must be gym.spaces objects
         # Example when using discrete actions:
         self.n_actions = n_actions
-        self.action_space = spaces.Discrete(n_actions)
-        self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(26,), dtype=numpy.uint8)
+        # self.action_space = spaces.Discrete(n_actions)
+        self.action_space = spaces.Box(low=-1.5, high=1.5, shape=(2,), dtype="float32")
+        self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(28,), dtype="float32") # 26 + 2(before action)
+        print(self.action_space)
         rclpy.init(args=None)
         self.drl_trainer = ros_NavEnv()
         self.goal_count = 0
         self.coll_count = 0
         self.global_count = 0
+        self.before_action = [0, 0]
         # rclpy.spin(self.drl_trainer)
         # self.drl_trainer.destroy()
         # rclpy.shutdown()
@@ -50,13 +55,24 @@ class gym_NavEnv(gym.Env):
         for _ in range(10):
             rclpy.spin_once(self.drl_trainer)
         twist = Twist()
-        twist.linear.x = 0.15
-        twist.angular.z = ((self.n_actions - 1) / 2 - action) * 1.5
+        #
+        # print(action)
+        lv = action[0]  # linear_velocity
+        av = action[1]  # angular_velocity
+        # print(lv, av)
+        # print(lv, av)
+        lv += 1.5  # 0 ~ 3
+        lv /= 20 # 0 ~ 0.15
+        # twist.linear.x = 0.15
+        twist.linear.x = lv
+        twist.angular.z = av
+        # print(lv, av)
+        # twist.angular.z = ((self.n_actions - 1) / 2 - action) * 1.5
         self.drl_trainer.cmd_vel_pub.publish(twist)
-        observation = self.drl_trainer.get_state()
+        observation = self.drl_trainer.get_state(self.before_action)
         reward = self.drl_trainer.get_reward(action)
         done = self.drl_trainer.done
-        if self.drl_trainer.done:
+        if done:
             self.drl_trainer.done = False
             self.drl_trainer.succeed = False
             self.drl_trainer.fail = False
@@ -67,17 +83,22 @@ class gym_NavEnv(gym.Env):
             print("current step : " + str(self.global_count) + " goal_count : " + str(
                 self.drl_trainer.goal_count) + " coll_count : " + str(
                 self.drl_trainer.coll_count) + " goal percent : " + str(
-                self.drl_trainer.goal_count // (self.drl_trainer.goal_count + self.drl_trainer.coll_count)))
+                float(self.drl_trainer.goal_count / (self.drl_trainer.goal_count + self.drl_trainer.coll_count))))
             self.drl_trainer.coll_count = 0
             self.drl_trainer.goal_count = 0
         # step loop rate
         # print(observation)
+        # print(action)
+        # print(lv, av)
         # print(reward)
         # time.sleep(0.5)
+        self.before_action[0] = lv
+        self.before_action[1] = av
 
         return observation, reward, done, info
 
     def reset(self):
+        # time.sleep(15)
         time.sleep(2)
         if self.drl_trainer.done:
             self.drl_trainer.done = False
@@ -88,7 +109,7 @@ class gym_NavEnv(gym.Env):
         self.drl_trainer.init_goal_distance = math.sqrt(
             (self.drl_trainer.goal_pose_x - self.drl_trainer.last_pose_x) ** 2
             + (self.drl_trainer.goal_pose_y - self.drl_trainer.last_pose_y) ** 2)
-        observation = self.drl_trainer.reset()
+        observation = self.drl_trainer.reset(self.before_action)
 
         return observation  # reward, done, info can't be included
 
@@ -212,38 +233,17 @@ class ros_NavEnv(Node):
         # print(self.goal_distance)
 
     def scan_callback(self, msg):
-        # print(msg)
         self.scan_ranges = msg.ranges
-        # print(len(msg.ranges))
-        # print(self.scan_ranges)
-        # count = 0
-        # sr = 0
-        # for i in self.scan_ranges:
-        #    if math.isnan(i):
-        #        count += 1
-        #    else:
-        #        sr += 1
-        # print(count)
-        # print(len(self.scan_ranges))
-        # print(sr)
         self.min_obstacle_distance = min(self.scan_ranges)
         self.min_obstacle_angle = numpy.argmin(self.scan_ranges)
 
-    def get_state(self):
+    def get_state(self, extraargs):
         # state scaling
-        # self.scan_ranges = self.scan_ranges[:253]
-        # print(len(self.scan_ranges))
         pre_state = []
         for i in range(24):
             # print(int((len(self.scan_ranges)/24)*i))
             pre_state.append(self.scan_ranges[int((len(self.scan_ranges) / 24) * i)])
-
-        # for i in range(len(self.scan_ranges)):
-        #    if len(self.scan_ranges)/24 == 0:
-        #        if len(pre_state) < 24:
-        #            pre_state.append(i)
         # pre_state = self.scan_ranges[0::15]
-        # print(len(self.scan_ranges), len(pre_state))
         state = []
         # print(self.goal_distance, self.goal_angle)
 
@@ -254,6 +254,10 @@ class ros_NavEnv(Node):
             if scan == numpy.inf:
                 scan = 3.5
             # scan = scan / 3.5
+            # if scan > 1:
+            #     scan = 1
+            # elif scan < -1:
+            #     scan = -1
             if scan < 3.5:
                 pass
             else:
@@ -264,10 +268,13 @@ class ros_NavEnv(Node):
         # for data in state:
         #     if not (data >= -1 and data <= 1):
         #         print(state)
+        state.append(extraargs[0])
+        state.append(extraargs[1])
+        #print(state)
         self.local_step += 1
-        # print(state)
+
         # Succeed
-        if self.goal_distance < 0.2:  # unit: m
+        if self.goal_distance < 0.15:  # unit: m
             print("Goal! :)")
             self.succeed = True
             self.done = True
@@ -280,7 +287,7 @@ class ros_NavEnv(Node):
             self.task_succeed_client.call_async(req)
 
         # Fail
-        if self.min_obstacle_distance < 0.2:  # unit: m
+        if self.min_obstacle_distance < 0.15:  # unit: m
             print("Collision! :(")
             self.fail = True
             self.done = True
@@ -297,7 +304,7 @@ class ros_NavEnv(Node):
             # os.system('killall rviz2')
             # time.sleep(5) # rviz2
 
-        if self.local_step == 5000:
+        if self.local_step == 500:
             print("Time out! :(")
             self.fail = True
             self.done = True
@@ -311,31 +318,8 @@ class ros_NavEnv(Node):
 
         return state
 
-    def reset(self):
-        return self.get_state()
-
-    def dqn_com_callback(self, request, response):
-        action = request.action
-        twist = Twist()
-        twist.linear.x = 0.3
-        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
-        self.cmd_vel_pub.publish(twist)
-
-        response.state = self.get_state()
-        response.reward = self.get_reward(action)
-        response.done = self.done
-
-        if self.done is True:
-            self.done = False
-            self.succeed = False
-            self.fail = False
-
-        if request.init is True:
-            self.init_goal_distance = math.sqrt(
-                (self.goal_pose_x - self.last_pose_x) ** 2
-                + (self.goal_pose_y - self.last_pose_y) ** 2)
-
-        return response
+    def reset(self, extraargs):
+        return self.get_state(extraargs)
 
     def get_reward(self, action):
         # yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
@@ -371,10 +355,15 @@ class ros_NavEnv(Node):
         current_distance = self.goal_distance
         # heading = state[-4]
 
-        for i in range(5):
-            angle = -math.pi / 4 + self.goal_angle + (math.pi / 8 * i) + math.pi / 2
-            tr = 1 - 4 * math.fabs(0.5 - math.modf(0.25 + 0.5 * angle % (2 * math.pi) / math.pi)[0])
-            yaw_reward.append(tr)
+        # for i in range(5):
+        #     angle = -math.pi / 4 + self.goal_angle + (math.pi / 8 * i) + math.pi / 2
+        #     tr = 1 - 4 * math.fabs(0.5 - math.modf(0.25 + 0.5 * angle % (2 * math.pi) / math.pi)[0])
+        #     yaw_reward.append(tr)
+
+        av = (action[1] + 1.5) * 4 / 3 # -1.5 ~ 1.5 -> 0 ~ 3 -> 0 ~ 12 -> 0 ~ 4
+
+        angle = -math.pi / 4 + self.goal_angle + (math.pi / 8 * av) + math.pi / 2
+        yaw_reward = 1 - 4 * math.fabs(0.5 - math.modf(0.25 + 0.5 * angle % (2 * math.pi) / math.pi)[0])
 
         distance_rate = 2 ** (current_distance / self.init_goal_distance)
 
@@ -383,7 +372,7 @@ class ros_NavEnv(Node):
         # else:
         #    ob_reward = 0
 
-        reward = ((round(yaw_reward[action] * 5, 2)) * distance_rate) * 0.1
+        reward = ((round(yaw_reward * 5, 2)) * distance_rate) * 0.1
 
         if self.succeed:
             # print(self.succeed)
@@ -392,7 +381,7 @@ class ros_NavEnv(Node):
         elif self.fail:
             # print(self.fail)
             reward += -100
-        # print(reward)
+        print(reward)
         return reward
 
     """*******************************************************************************
@@ -422,6 +411,29 @@ class ros_NavEnv(Node):
 
         return roll, pitch, yaw
 
+    def dqn_com_callback(self, request, response):
+        action = request.action
+        twist = Twist()
+        twist.linear.x = 0.15
+        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
+        self.cmd_vel_pub.publish(twist)
+
+        response.state = self.get_state()
+        response.reward = self.get_reward(action)
+        response.done = self.done
+
+        if self.done is True:
+            self.done = False
+            self.succeed = False
+            self.fail = False
+
+        if request.init is True:
+            self.init_goal_distance = math.sqrt(
+                (self.goal_pose_x - self.last_pose_x) ** 2
+                + (self.goal_pose_y - self.last_pose_y) ** 2)
+
+        return response
+
 
 class Trainer():
     def __init__(self, mode):
@@ -436,14 +448,24 @@ class Trainer():
         print("2")
 
     def training(self):
+        # The noise objects for TD3
+        n_actions = self.env.action_space.shape[-1]
+        print(n_actions)
+        action_noise = NormalActionNoise(mean=numpy.zeros(n_actions), sigma=0.1 * numpy.ones(n_actions))
         # model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
+        # model = TD3("MlpPolicy", self.env, action_noise=action_noise, verbose=1)
+        # model.learn(total_timesteps=100000, log_interval=5000)
+        # model.save("td3_")
+
+        model = TD3("MlpPolicy", self.env, action_noise=action_noise, verbose=1)
+        # model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
+        # model = TD3.load(path="result_td3/td3_100000", env=self.env, action_noise=action_noise, verbose=1)
         model.learn(total_timesteps=100000, log_interval=5000)
-        model.save("result_ppo/ppo_r1_2300000")
-        result_folder = "result_ppo/"
+        model.save("result_dqn/td3_r1_100000")
+        result_folder = "result_dqn/"
 
         for i in range(10):
-            logname = "ppo_r1_" + str((i + 2) * 100000 + 2200000)
+            logname = "td3_r1_" + str((i + 2) * 100000 + 0)
             model.learn(total_timesteps=100000,
                         reset_num_timesteps=False,
                         tb_log_name=logname)
@@ -453,12 +475,12 @@ class Trainer():
             path = result_folder + logname
             model.save(path)
 
-        # self.env = gym_NavEnv(n_actions=5)
-        # model.load(load_path=path, env=env)
-
     def inferencing(self):
         # model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
+        n_actions = self.env.action_space.shape[-1]
+        print(n_actions)
+        action_noise = NormalActionNoise(mean=numpy.zeros(n_actions), sigma=0.1 * numpy.ones(n_actions))
+        model = TD3.load(path="result_td3/td3_100000", env=self.env, action_noise=action_noise, verbose=1)
 
         obs = self.env.reset()
         while True:

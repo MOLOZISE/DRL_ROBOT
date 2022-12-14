@@ -270,7 +270,7 @@ class ros_NavEnv(Node):
         #         print(state)
         state.append(extraargs[0])
         state.append(extraargs[1])
-        print(state)
+        #print(state)
         self.local_step += 1
 
         # Succeed
@@ -320,29 +320,6 @@ class ros_NavEnv(Node):
 
     def reset(self, extraargs):
         return self.get_state(extraargs)
-
-    def dqn_com_callback(self, request, response):
-        action = request.action
-        twist = Twist()
-        twist.linear.x = 0.15
-        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
-        self.cmd_vel_pub.publish(twist)
-
-        response.state = self.get_state()
-        response.reward = self.get_reward(action)
-        response.done = self.done
-
-        if self.done is True:
-            self.done = False
-            self.succeed = False
-            self.fail = False
-
-        if request.init is True:
-            self.init_goal_distance = math.sqrt(
-                (self.goal_pose_x - self.last_pose_x) ** 2
-                + (self.goal_pose_y - self.last_pose_y) ** 2)
-
-        return response
 
     def get_reward(self, action):
         # yaw_reward = 1 - 2 * math.sqrt(math.fabs(self.goal_angle / math.pi))
@@ -416,20 +393,19 @@ class ros_NavEnv(Node):
         if self.succeed:
             # print(self.succeed)
             reward = 200
-            return reward
             # print(reward)
         elif self.fail:
             # print(self.fail)
             reward = -150
-        elif obstacle_min_range < 0.15 + 0.15: # radius robot + safety
-            reward = 1 - (current_distance / (0.15 + 0.15))
-        else: # scale factor 1
-            reward = 1 * (self.init_goal_distance - current_distance)
+        # elif obstacle_min_range < 0.15 + 0.15: # radius robot + safety
+        #     reward = 1 - (current_distance / (0.15 + 0.15))
+        # else: # scale factor 1
+        #     reward = 1 * (self.init_goal_distance - current_distance)
         # else:
         #     r3 = lambda x: 1 - x if x < 1 else 0.0
         #     reward = action[0] / 2 - abs(action[1]) / 2 - r3(obstacle_min_range) / 2
-        # else:
-        #    reward = 1 - numpy.exp(current_distance*0.1)
+        else:
+           reward = 1 - numpy.exp(current_distance*0.99) # discount factor 0.99
         print(reward)
 
         return reward
@@ -461,6 +437,29 @@ class ros_NavEnv(Node):
 
         return roll, pitch, yaw
 
+    def dqn_com_callback(self, request, response):
+        action = request.action
+        twist = Twist()
+        twist.linear.x = 0.15
+        twist.angular.z = ((self.action_size - 1) / 2 - action) * 1.5
+        self.cmd_vel_pub.publish(twist)
+
+        response.state = self.get_state()
+        response.reward = self.get_reward(action)
+        response.done = self.done
+
+        if self.done is True:
+            self.done = False
+            self.succeed = False
+            self.fail = False
+
+        if request.init is True:
+            self.init_goal_distance = math.sqrt(
+                (self.goal_pose_x - self.last_pose_x) ** 2
+                + (self.goal_pose_y - self.last_pose_y) ** 2)
+
+        return response
+
 
 class Trainer():
     def __init__(self, mode):
@@ -488,11 +487,11 @@ class Trainer():
         # model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
         # model = TD3.load(path="result_td3/td3_100000", env=self.env, action_noise=action_noise, verbose=1)
         model.learn(total_timesteps=100000, log_interval=5000)
-        model.save("result_td3/td3_100000")
+        model.save("result_td3/td3_r3_100000")
         result_folder = "result_td3/"
 
         for i in range(10):
-            logname = "td3_" + str((i + 2) * 100000 + 0)
+            logname = "td3_r3_" + str((i + 2) * 100000 + 0)
             model.learn(total_timesteps=100000,
                         reset_num_timesteps=False,
                         tb_log_name=logname)
@@ -508,14 +507,36 @@ class Trainer():
         print(n_actions)
         action_noise = NormalActionNoise(mean=numpy.zeros(n_actions), sigma=0.1 * numpy.ones(n_actions))
         model = TD3.load(path="result_td3/td3_100000", env=self.env, action_noise=action_noise, verbose=1)
+        # NoE Number of Episode
+        # NoS Number of Steps
+        # AoR Accumulation of Reward
+        # NoG Number of Goal
+        # NoC Number of Collision
 
+        NoE = 50
+        NoS = 0
+        AoR = 0
+        NoG = 0
+        NoC = 0
         obs = self.env.reset()
-        while True:
+        Episode = NoE
+        while Episode:
             action, _states = model.predict(obs)
             obs, rewards, dones, info = self.env.step(action)
+            NoS += 1
+            AoR += rewards
             if dones:
+                if rewards < -50:
+                    NoC += 1
+                if rewards > 50:
+                    NoG += 1
+                Episode -= 1
                 time.sleep(10)
-
+        print("NoE : " + str(NoE))
+        print("NoS : " + str(NoS))
+        print("AoR : " + str(AoR))
+        print("NoG : " + str(NoG))
+        print("NoC : " + str(NoC))
 
 def main(args=sys.argv[1]):
     Trainer(args)
