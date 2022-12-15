@@ -38,7 +38,7 @@ class gym_NavEnv(gym.Env):
         # Example when using discrete actions:
         self.n_actions = n_actions
         # self.action_space = spaces.Discrete(n_actions)
-        self.action_space = spaces.Box(low=-2, high=2, shape=(2,), dtype="float32")
+        self.action_space = spaces.Box(low=-1.5, high=1.5, shape=(2,), dtype="float32")
         self.observation_space = spaces.Box(low=-3.5, high=3.5, shape=(28,), dtype="float32") # 26 + 2(before action)
         print(self.action_space)
         rclpy.init(args=None)
@@ -65,7 +65,7 @@ class gym_NavEnv(gym.Env):
         lv /= 20 # 0 ~ 0.2
         # twist.linear.x = 0.15
         twist.linear.x = lv
-        twist.angular.z = av
+        twist.angular.z = float(av)
         # print(lv, av)
         # twist.angular.z = ((self.n_actions - 1) / 2 - action) * 1.5
         self.drl_trainer.cmd_vel_pub.publish(twist)
@@ -506,7 +506,7 @@ class Trainer():
         n_actions = self.env.action_space.shape[-1]
         print(n_actions)
         action_noise = NormalActionNoise(mean=numpy.zeros(n_actions), sigma=0.1 * numpy.ones(n_actions))
-        model = TD3.load(path="result_td3/td3_100000", env=self.env, action_noise=action_noise, verbose=1)
+        model = TD3.load(path="result_dqn/td3_r1_300000", env=self.env, action_noise=action_noise, verbose=1)
         # NoE Number of Episode
         # NoS Number of Steps
         # AoR Accumulation of Reward

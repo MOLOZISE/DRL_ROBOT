@@ -14,7 +14,8 @@ from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Empty
 
 from turtlebot3_msgs.srv import Dqn
-from stable_baselines3 import PPO
+#from stable_baselines3 import PPO
+from stable_baselines3 import DQN
 
 import time
 
@@ -297,7 +298,7 @@ class ros_NavEnv(Node):
             # os.system('killall rviz2')
             # time.sleep(5) # rviz2
 
-        if self.local_step == 5000:
+        if self.local_step == 500:
             print("Time out! :(")
             self.fail = True
             self.done = True
@@ -458,7 +459,8 @@ class Trainer():
 
     def inferencing(self):
         # model = PPO("MlpPolicy", self.env, verbose=1)
-        model = PPO.load(path="result_ppo/ppo_r1_2200000", env=self.env)
+        #model = PPO.load(path="result_dqn/ppo_r1_300000", env=self.env)
+        model = DQN.load(path="result_dqn/dqn_r1_300000", env=self.env)
         # NoE Number of Episode
         # NoS Number of Steps
         # AoR Accumulation of Reward
@@ -474,6 +476,7 @@ class Trainer():
         Episode = NoE
         while Episode:
             action, _states = model.predict(obs)
+            # action, _states = model.predict(obs, deterministic=True) # DQN
             obs, rewards, dones, info = self.env.step(action)
             NoS += 1
             AoR += rewards
