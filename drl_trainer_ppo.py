@@ -486,7 +486,7 @@ class Trainer():
                 if rewards > 50:
                     NoG += 1
                 Episode -= 1
-                time.sleep(10)
+                time.sleep(1)
         print("NoE : " + str(NoE))
         print("NoS : " + str(NoS))
         print("AoR : " + str(AoR))
